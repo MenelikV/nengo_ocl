@@ -35,6 +35,31 @@ def get_closures(f):
 
 
 class Simulator(sim_npy.Simulator):
+    unsupported = [
+        # learning rules
+        ('test_unsupervised', "Unsupervised learning rules not implemented"),
+        ('test_dt_dependence',
+             "Filtering matrices (i.e. learned transform), not implemented"),
+
+        # neuron types
+        ('test_alif.*', "ALIF neurons not implemented"),
+        ('test_izhikevich.*', "Izhikevich neurons not implemented"),
+        ('test_lif_min_voltage', "Min voltage not implemented"),
+
+        # nodes
+        ('test_none', "No error if nodes output None"),
+
+        # processes
+        ('test_brownnoise', "Filtered noise processes not yet implemented"),
+        ('test_noise_copies_ok',
+              "Filtered noise processes not yet implemented"),
+
+        # synapses
+        ('test_triangle', "Only linear filters implemented"),
+
+        # resetting
+        ('test_reset', "Resetting not implemented"),
+    ]
 
     def Array(self, val, dtype=np.float32):
         return to_device(self.queue, np.asarray(val, dtype=dtype))
