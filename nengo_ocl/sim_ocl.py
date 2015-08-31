@@ -7,7 +7,7 @@ import numpy as np
 import pyopencl as cl
 
 from nengo.neurons import LIF, LIFRate
-from nengo.processes import WhiteNoise, FilteredNoise, WhiteSignal
+from nengo.processes import WhiteNoise, FilteredNoise, WhiteSignal, Conv2
 from nengo.synapses import LinearFilter
 from nengo.utils.compat import OrderedDict
 from nengo.utils.progress import ProgressTracker
@@ -19,7 +19,8 @@ from nengo_ocl.clra_gemv import plan_ragged_gather_gemv
 from nengo_ocl.clra_nonlinearities import (
     plan_timeupdate, plan_reset, plan_slicedcopy, plan_lif, plan_lif_rate,
     plan_direct, plan_probes, plan_linear_synapse, plan_elementwise_inc,
-    init_rng, get_dist_enums_params, plan_whitenoise, plan_whitesignal)
+    init_rng, get_dist_enums_params, plan_whitenoise, plan_whitesignal,
+    plan_conv2)
 from nengo_ocl.plan import BasePlan, PythonPlan, Plans
 from nengo_ocl.ast_conversion import OCL_Function
 
@@ -240,8 +241,8 @@ class Simulator(sim_npy.Simulator):
         tau = self.RaggedArray(
             [np.array(op.neurons.tau_rc, dtype=J.dtype) for op in ops])
         dt = self.model.dt
-        return [plan_lif(self.queue, J, V, W, V, W, S, ref, tau, dt,
-                         n_elements=2)]
+        return [plan_lif(
+            self.queue, J, V, W, V, W, S, ref, tau, dt, n_elements=2)]
 
     def _plan_LIFRate(self, ops):
         J = self.all_data[[self.sidx[op.J] for op in ops]]
@@ -251,8 +252,7 @@ class Simulator(sim_npy.Simulator):
         tau = self.RaggedArray(
             [np.array(op.neurons.tau_rc, dtype=J.dtype) for op in ops])
         dt = self.model.dt
-        return [plan_lif_rate(self.queue, J, R, ref, tau, dt,
-                              n_elements=2)]
+        return [plan_lif_rate(self.queue, J, R, ref, tau, dt, n_elements=2)]
 
     def plan_SimSynapse(self, ops):
         for op in ops:
@@ -276,12 +276,9 @@ class Simulator(sim_npy.Simulator):
         groups = groupby(all_ops, lambda op: op.process.__class__)
         plans = []
         for process_class, ops in groups:
-            if process_class is WhiteNoise:
-                plans.extend(self._plan_WhiteNoise(ops))
-            elif process_class is FilteredNoise:
-                plans.extend(self._plan_FilteredNoise(ops))
-            elif process_class is WhiteSignal:
-                plans.extend(self._plan_WhiteSignal(ops))
+            attrname = '_plan_' + process_class.__name__
+            if hasattr(self, attrname):
+                plans.extend(getattr(self, attrname)(ops))
             else:
                 raise NotImplementedError("Unsupported process type '%s'"
                                           % process_class.__name__)
@@ -314,12 +311,25 @@ class Simulator(sim_npy.Simulator):
         for op in ops:
             assert op.input is None and op.output is not None
             f = op.process.make_step(0, op.output.size, dt, self.rng)
-            closures = get_closures(f)
-            assert closures['dt'] == dt
-            signals.append(closures['signal'])
+            signals.append(get_closures(f)['signal'])
 
         signals = self.RaggedArray(signals)
         return [plan_whitesignal(self.queue, Y, t, signals, dt)]
+
+    def _plan_Conv2(self, ops):
+        ps = [op.process for op in ops]
+        X = self.all_data[[self.sidx[op.input] for op in ops]]
+        Y = self.all_data[[self.sidx[op.output] for op in ops]]
+        filters = self.RaggedArray([
+            f.reshape(np.prod(f.shape[:3]), -1) if f.ndim == 6 else
+            f.reshape(f.shape[0], -1) for f in (p.filters for p in ps)])
+        biases = self.RaggedArray([
+            (np.zeros(p.shape_out) + p.biases).ravel() for p in ps])
+        shapes = self.RaggedArray([
+            np.array(list(p.shape_out) + list(p.filters.shape[-3:]),
+                     dtype=np.int32) for p in ps])
+        local = self.Array([p.filters.ndim == 6 for p in ps], dtype=np.int32)
+        return [plan_conv2(self.queue, X, Y, filters, biases, shapes, local)]
 
     def plan_SimBCM(self, ops):
         raise NotImplementedError("BCM learning rule")
