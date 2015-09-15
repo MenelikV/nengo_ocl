@@ -1,5 +1,5 @@
 """
-Black-box testing of the sim_ocl Simulator.
+Black-box testing of the OCL Simulator.
 """
 import sys
 
@@ -10,14 +10,14 @@ import nengo
 import nengo.tests.test_synapses
 from nengo.utils.testing import allclose
 
-from nengo_ocl import sim_ocl
+import nengo_ocl
 
 ctx = cl.create_some_context()
 
 
-class OclSimulator(sim_ocl.Simulator):
+class Simulator(nengo_ocl.Simulator):
     def __init__(self, *args, **kwargs):
-        super(OclSimulator, self).__init__(*args, context=ctx, **kwargs)
+        super(Simulator, self).__init__(*args, context=ctx, **kwargs)
 
 
 def allclose_tol(*args, **kwargs):

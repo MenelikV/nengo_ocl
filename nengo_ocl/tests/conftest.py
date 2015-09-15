@@ -1,1 +1,1 @@
-from nengo.tests.conftest import *
+from nengo.tests.conftest import plt, rng
