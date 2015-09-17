@@ -10,6 +10,14 @@ from nengo_ocl.plan import Plan
 from nengo_ocl.utils import as_ascii, indent
 
 
+def all_equal(a, b):
+    return (np.asarray(a) == np.asarray(b)).all()
+
+
+def round_up(x, n):
+    return int(np.ceil(float(x) / n)) * n
+
+
 def plan_timeupdate(queue, step, time, dt):
     assert len(step) == len(time) == 1
     assert step.ctype == time.ctype == 'float'
@@ -1275,6 +1283,9 @@ def plan_conv2(queue, X, Y, filters, biases, shapes, local, tag=None):
             const int si = shapes[4];
             const int sj = shapes[5];
             const int nij = ni * nj;
+            if (ij >= nij)
+                return;
+
             const int sij = si * sj;
             const int csij = c * sij;
             const int si2 = (si - 1) / 2;
@@ -1288,7 +1299,7 @@ def plan_conv2(queue, X, Y, filters, biases, shapes, local, tag=None):
 
             if (!local_filters) {
                 // standard convolution
-                for (; ij < nij; ij += get_global_size(0)) {
+//                for (; ij < nij; ij += get_global_size(0)) {
                     const int i = ij / nj;
                     const int j = ij - i * nj;
 
@@ -1304,12 +1315,12 @@ def plan_conv2(queue, X, Y, filters, biases, shapes, local, tag=None):
 
                         y[k*nij + ij] = out;
                     }
-                }
+//                }
             } else {
                 // local filters
                 __global ${Ftype} *fij;
 
-                for (; ij < nij; ij += get_global_size(0)) {
+//                for (; ij < nij; ij += get_global_size(0)) {
                     const int i = ij / nj;
                     const int j = ij - i * nj;
 
@@ -1327,7 +1338,7 @@ def plan_conv2(queue, X, Y, filters, biases, shapes, local, tag=None):
 
                         y[k*nij + ij] = out;
                     }
-                }
+//                }
             }
         }
         """
@@ -1353,8 +1364,10 @@ def plan_conv2(queue, X, Y, filters, biases, shapes, local, tag=None):
     _fn = cl.Program(queue.context, text).build().conv2
     _fn.set_args(*[arr.data for arr in full_args])
 
-    max_len = min(queue.device.max_work_group_size, 32)  # TODO: better max
-    gsize = (max_len, N)
+    max_len = min(queue.device.max_work_group_size, 128)  # TODO: better max
+    # gsize = (max_len, N)
+    sizes = [int(s[1, 0] * s[2, 0]) for s in shapes]
+    gsize = (round_up(max(sizes), max_len), N)
     lsize = (max_len, 1)
     rval = Plan(queue, _fn, gsize, lsize=lsize, name="cl_conv2", tag=tag)
     rval.full_args = full_args     # prevent garbage-collection
