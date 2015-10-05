@@ -339,7 +339,8 @@ class Simulator(sim_npy.Simulator):
             shape = list(p.shape_out) + list(p.filters.shape[-3:])
             conv = (p.filters.ndim == 4)
             plans.append(plan_conv2(
-                self.queue, X, Y, F, B, shape, conv, transposed=TRANSPOSED))
+                self.queue, X, Y, F, B, shape, conv, transposed=TRANSPOSED,
+                tag="shape=%s, conv=%s" % (shape, conv)))
 
         return plans
 

@@ -1255,6 +1255,8 @@ def plan_conv2(queue, X, Y, filters, biases, shape, conv, tag=None,
         if len(ary.shape) == 2:
             assert ary.strides[0] == ary.dtype.itemsize * ary.shape[1]
 
+    assert X.ctype == Y.ctype == filters.ctype == biases.ctype
+
     LOCAL_MEMORY = False  # whether to use the local memory kernel or not
     text = ("""
     __kernel void conv2(
@@ -1418,6 +1420,7 @@ def plan_conv2(queue, X, Y, filters, biases, shape, conv, tag=None,
     si2, sj2 = (si - 1) / 2, (sj - 1) / 2
     nipatch, njpatch = lsize[0] + si - 1, lsize[1] + sj - 1
     npatch = nipatch * njpatch
+    bw_per_call = X.nbytes + filters.nbytes + biases.nbytes + Y.nbytes
 
     assert np.prod(lsize) <= queue.device.max_work_group_size
     assert X.ctype == Y.ctype == filters.ctype == biases.ctype
@@ -1437,6 +1440,7 @@ def plan_conv2(queue, X, Y, filters, biases, shape, conv, tag=None,
 
     rval = Plan(queue, _fn, gsize, lsize=lsize, name="cl_conv2", tag=tag)
     rval.full_args = full_args     # prevent garbage-collection
+    rval.bw_per_call = bw_per_call
     return rval
 
 
