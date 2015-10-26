@@ -247,23 +247,22 @@ class Simulator(sim_npy.Simulator):
         V = self.all_data[[self.sidx[op.states[0]] for op in ops]]
         W = self.all_data[[self.sidx[op.states[1]] for op in ops]]
         S = self.all_data[[self.sidx[op.output] for op in ops]]
-        ref = self.RaggedArray(
-            [np.array(op.neurons.tau_ref, dtype=J.dtype) for op in ops])
-        tau = self.RaggedArray(
-            [np.array(op.neurons.tau_rc, dtype=J.dtype) for op in ops])
+        ref = self.RaggedArray([op.neurons.tau_ref * np.ones(op.J.size)
+                                for op in ops], dtype=J.dtype)
+        tau = self.RaggedArray([op.neurons.tau_rc * np.ones(op.J.size)
+                                for op in ops], dtype=J.dtype)
         dt = self.model.dt
-        return [plan_lif(
-            self.queue, J, V, W, V, W, S, ref, tau, dt, n_elements=0)]
+        return [plan_lif(self.queue, J, V, W, V, W, S, ref, tau, dt)]
 
     def _plan_LIFRate(self, ops):
         J = self.all_data[[self.sidx[op.J] for op in ops]]
         R = self.all_data[[self.sidx[op.output] for op in ops]]
-        ref = self.RaggedArray(
-            [np.array(op.neurons.tau_ref, dtype=J.dtype) for op in ops])
-        tau = self.RaggedArray(
-            [np.array(op.neurons.tau_rc, dtype=J.dtype) for op in ops])
+        ref = self.RaggedArray([op.neurons.tau_ref * np.ones(op.J.size)
+                                for op in ops], dtype=J.dtype)
+        tau = self.RaggedArray([op.neurons.tau_rc * np.ones(op.J.size)
+                                for op in ops], dtype=J.dtype)
         dt = self.model.dt
-        return [plan_lif_rate(self.queue, J, R, ref, tau, dt, n_elements=0)]
+        return [plan_lif_rate(self.queue, J, R, ref, tau, dt)]
 
     def plan_SimSynapse(self, ops):
         for op in ops:
