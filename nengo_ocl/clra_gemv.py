@@ -113,16 +113,10 @@ class gemv_prog(object):
         self.float_gamma, self.cl_gamma, self.clra_gamma = \
             float_cl_clra(queue, gamma, Y.dtype, len(Y))
 
-        assert self.float_alpha == 1.0
-        assert self.float_beta == 1.0
-        assert self.float_gamma == 0.0
-
         if Y_in is None:
             self.Y_in = Y
         else:
             self.Y_in = Y_in
-
-        assert self.Y_in is Y
 
         self.queue = queue
         self.A = A
@@ -849,6 +843,10 @@ def many_dots_impl(p, items):
 
 def block_impl(p, items):
 
+    assert p.float_alpha == 1.0
+    assert p.float_beta == 1.0
+    assert p.float_gamma == 0.0
+
     if p.clra_alpha is not None:
         raise NotImplementedError()
     if p.clra_gamma is not None:
@@ -862,16 +860,9 @@ def block_impl(p, items):
     if not all(s == 1 for s in p.A.stride1s):
         raise NotImplementedError()
 
-    assert p.float_alpha is not None
-    assert p.float_gamma is not None
-    assert p.float_alpha == 1.0
-    assert p.float_gamma == 0.0
-
     if p.A_js is None:
         # -- easy probably, but not done
         raise NotImplementedError()
-
-    assert p.float_beta == 1.0  # TODO
 
     # --- blocking
     # We want to group the dot products into blocks, so that each workgroup
@@ -895,15 +886,16 @@ def block_impl(p, items):
     Ybufstart = 0
 
     Yshape0s_reduce = []
+    Yinstride0s_reduce = []
+    Yinstarts_reduce = []
     Ystride0s_reduce = []
     Ystarts_reduce = []
     Ybufinds_reduce = []
     bw_reduce = 0
 
     for n in items:
+        assert p.Y_in.shape0s[n] == p.Y.shape0s[n]
         shape0n = p.Y.shape0s[n]
-        # shape0n = clAs.shape0s[n]
-        # shape1n = clAs.shape1s[n]
 
         for i in range(0, shape0n, block_y):
             shape0i = min(shape0n - i, block_y)
@@ -920,7 +912,6 @@ def block_impl(p, items):
                 assert p.A.shape0s[aj] == shape0n
                 assert p.A.shape1s[aj] == p.X.shape0s[xj]
                 assert p.X.shape1s[xj] == 1
-
                 shape1n = p.A.shape1s[aj]
 
                 for j in range(0, shape1n, block_x):
@@ -939,33 +930,29 @@ def block_impl(p, items):
 
             # --- Y-blocking for reduce
             Yshape0s_reduce.append(shape0i)
+            Yinstride0s_reduce.append(p.Y_in.stride0s[n])
+            Yinstarts_reduce.append(p.Y_in.starts[n] + i*p.Y_in.stride0s[n])
             Ystride0s_reduce.append(p.Y.stride0s[n])
             Ystarts_reduce.append(p.Y.starts[n] + i*p.Y.stride0s[n])
             Ybufinds_reduce.append(Ybufind_reduce)
             bw_reduce += shape0i*(len(Ybufind_reduce) + 1) * p.Y.dtype.itemsize
 
     # --- create structure
-    gstructure = np.column_stack([
-        shape0s, shape1s, Astride0s, Astride1s,
-        Astarts, Xstride0s, Xstarts, Ybufstarts]).astype(np.int32)
-    cl_gstructure = to_device(p.queue, gstructure)
-    print(gstructure)
-    print(cl_gstructure.strides)
-    print(cl_gstructure.get())
+    gstructure = np.column_stack([shape0s, shape1s, Astride0s, Astride1s,
+                                  Astarts, Xstride0s, Xstarts, Ybufstarts])
+    cl_gstructure = to_device(p.queue, gstructure.astype(np.int32))
 
     # --- create Y buffer
-    print(Ybufstarts)
-    print(Ybufstart)
     clYbuf = to_device(p.queue, np.zeros(Ybufstart, dtype=p.Y.dtype))
 
-    lsize0 = 8
+    lsize0 = 4
+    # lsize0 = 8
     lsize0_log2 = int(np.log2(lsize0))
     assert 2**lsize0_log2 == lsize0
 
     lsize = (lsize0, block_y, 1)
     gsize = (lsize[0], lsize[1], gstructure.shape[0])
     assert np.prod(lsize) >= block_x
-    print(gsize)
 
     textconf = dict(
         A=p.A,
@@ -1062,6 +1049,8 @@ def block_impl(p, items):
 
     Nreduce = len(Yshape0s_reduce)
     clYshape0s_reduce = to_device(p.queue, np.array(Yshape0s_reduce, dtype=np.int32))
+    clYinstride0s_reduce = to_device(p.queue, np.array(Yinstride0s_reduce, dtype=np.int32))
+    clYinstarts_reduce = to_device(p.queue, np.array(Yinstarts_reduce, dtype=np.int32))
     clYstride0s_reduce = to_device(p.queue, np.array(Ystride0s_reduce, dtype=np.int32))
     clYstarts_reduce = to_device(p.queue, np.array(Ystarts_reduce, dtype=np.int32))
     clYbufinds_reduce = CLRaggedArray.from_arrays(p.queue, Ybufinds_reduce, dtype=np.int32, align=align)
@@ -1070,6 +1059,7 @@ def block_impl(p, items):
 
     textconf_reduce = dict(
         Ybuf=clYbuf,
+        Yin=p.Y_in,
         Y=p.Y,
     )
 
@@ -1079,6 +1069,9 @@ def block_impl(p, items):
         clYbufinds_reduce.cl_starts,
         clYbufinds_reduce.cl_buf,
         clYbuf,
+        clYinstride0s_reduce,
+        clYinstarts_reduce,
+        p.Y_in.cl_buf,
         clYstride0s_reduce,
         clYstarts_reduce,
         p.Y.cl_buf,
@@ -1094,6 +1087,9 @@ def block_impl(p, items):
         __global const int *Istarts,
         __global const int *Idata,
         __global ${Ybuf.ctype} *Ybufdata,
+        __global const int *Yinstride0s,
+        __global const int *Yinstarts,
+        __global ${Yin.ctype} *Yindata,
         __global const int *Ystride0s,
         __global const int *Ystarts,
         __global ${Y.ctype} *Ydata
@@ -1107,14 +1103,15 @@ def block_impl(p, items):
         const int Ishape0 = Ishape0s[n];
 
         __global const int *Ybufstart = Idata + Istarts[n];
+        __global ${Yin.ctype} *yin = Yindata + Yinstarts[n];
         __global ${Y.ctype} *y = Ydata + Ystarts[n];
 
-        ${Y.ctype} sum = 0;
+        ${Y.ctype} sum = yin[i*Yinstride0s[n]];
         for (int j = 0; j < Ishape0; j++) {
             sum += Ybufdata[Ybufstart[j] + i];
         }
 
-        y[i*Ystride0s[n]] += sum;
+        y[i*Ystride0s[n]] = sum;
     }
     """
 
